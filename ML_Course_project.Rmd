@@ -1,0 +1,235 @@
+---
+title: "Machine Learning"
+author: "Nikos Kouvoutsakis"
+date: "25-7-2018"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## Intro
+*One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, our goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.*
+
+## Goal
+*The goal of this project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. We use any of the other variables to predict with. We wll create a report describing how we built our model, how we used cross validation, what we think the expected out of sample error is, and why we made the choices we did. We will also use our prediction model to predict 20 different test cases.* 
+
+
+
+## Load needed packages and set defaults
+
+```{r setoptionS,message=F, warning=F}
+knitr::opts_chunk$set(echo=TRUE)
+knitr::opts_knit$set(root.dir = "~/R_Programs")
+library(GGally)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(kableExtra)
+library(knitr)
+library(caret)
+library(rattle)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(rattle)
+library(randomForest)
+library(doParallel)
+library(lda)
+```
+
+*Create Project's folder in working directory*
+
+
+```{r createprojectfolder} 
+if(!file.exists("./Machine.learning")){
+dir.create("./Machine.learning")
+}
+```
+##  Data Processing
+
+###  1.Loading project's data
+
+
+*Download files if not exist and Load data*
+
+
+```{r Downloadfile, message=F, warning=F}
+if(!file.exists("./Machine.learning/TrainingData.csv")){
+fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+download.file(fileUrl, destfile = "./Machine.learning/TrainingData.csv")
+TrainingData<-read.csv("./Machine.learning/TrainingData.csv") 
+}else{
+TrainingData<-read.csv("./Machine.learning/TrainingData.csv") 
+}
+
+if(!file.exists("./Machine.learning/ValidationData.csv")){
+fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(fileUrl, destfile = "./Machine.learning/ValidationData.csv")
+ValidationData<-read.csv("./Machine.learning/ValidationData.csv") 
+}else{
+ValidationData<-read.csv("./Machine.learning/ValidationData.csv") 
+}
+
+str(TrainingData)
+str(ValidationData)
+```
+
+### 2.Data cleaning and preprocess
+
+- Remove first 7 variables since they only provide us with information on persons which carried the tests.
+- Removing Columns with more than 80% of NAs or Blank values.
+- Removing nearZero variables
+- Keep common Variables in both Training and Validation Datasets.
+
+All above actions are applied in both Training and Validation datasets.
+
+
+```{r cleandata, message=F, warning=F}
+TrainingData<-TrainingData[,-c(1:7)]
+TrainingData<-TrainingData[, -which(colSums(is.na(TrainingData) | TrainingData=="") > 0.8*nrow(TrainingData))]
+ValidationData<-ValidationData[,-c(1:7)]
+ValidationData<-ValidationData[, -which(colSums(is.na(ValidationData) | ValidationData=="") > 0.8*nrow(ValidationData))]
+
+nzvTraining<-nearZeroVar(TrainingData,saveMetrics = TRUE)
+nzvValidation<-nearZeroVar(ValidationData,saveMetrics = TRUE)
+
+TrainingData<-TrainingData[,nzvTraining$nzv==FALSE]
+
+
+ValidationData<-ValidationData[,nzvValidation$nzv==FALSE]
+
+TrainingDataColum<-colnames(TrainingData)
+ValidationDataColum<-colnames(ValidationData)
+
+
+Allcolnames<-c(TrainingDataColum,ValidationDataColum)
+Allcolnames<-data.frame(Allcolnames)    
+colnames(Allcolnames)<-c("col")
+Allcolnames2<-as.data.frame(table(Allcolnames$col))
+
+output<-Allcolnames2[Allcolnames2$Freq==2,]
+unifcol<-as.vector(output$Var1)
+
+
+TrainingDataUNI<-TrainingData[,unifcol]
+TrainingDataUNI$classe<-TrainingData$classe
+
+#str(TrainingDataUNI)
+ValidationDataUNI<-ValidationData[,unifcol]
+#str(ValidationDataUNI)
+```
+
+
+### 3.Split cleaned training data into a new Train and Test sets, providing their respective dimensions.
+
+```{r SplitData, message=F, warning=F}
+set.seed(12345)
+inTrain<-createDataPartition(y=TrainingDataUNI$classe,p=0.75,list=FALSE)
+
+finalTrain<-TrainingDataUNI[inTrain,]
+finalTest<-TrainingDataUNI[-inTrain,]
+dim(finalTrain)
+dim(finalTest)
+```
+
+## Machine learning Algorithms
+
+We will apply 4 differenct machine learning algorithms
+
+- Classification Tree
+- Linear Discriminant Analysis
+- Random Forests
+- Gradient Boosting method
+
+and we will compare their respective results on the Train Set. (In Sample error) 
+This will be a first indication on which model performs better.
+
+As we know, in Sample error is always smaller than the out Sample error,
+so the error rates will be smaller than if we applied the models on the created Test set.
+
+
+### Algorithms application on Train Set
+
+
+```{r Forest, message=F, warning=T}
+set.seed(54321)
+TC<-trainControl(method="cv",number=5)
+modFitForest<-train(classe~.,data=finalTrain,method="rpart",trControl=TC)
+predRpart<-predict(modFitForest,finalTest)
+Accuracy.Tree<-confusionMatrix(finalTest$classe,predRpart)
+```
+
+```{r lda, message=F, warning=T}
+set.seed(54321)
+modFitLDA<-train(classe~.,data=finalTrain,method="lda",trControl=trainControl(method="cv",number=5))
+predLDA<-predict(modFitLDA,finalTest)
+Accuracy.LDA<-confusionMatrix(finalTest$classe,predLDA)
+```
+
+```{r ranforests, message=F, warning=F}
+set.seed(54321)
+no_cores <- detectCores()  
+cl <- makeCluster(no_cores)  
+registerDoParallel(cl)  
+modFitRForest<-train(classe~.,data=finalTrain,method="rf",trControl=TC)
+stopCluster(cl) 
+
+predRF<-predict(modFitRForest,finalTest)
+Accuracy.RForests<-confusionMatrix(finalTest$classe,predRF)
+
+```
+
+```{r GBM, message=F, warning=F}
+set.seed(54321)
+no_cores <- detectCores()  
+cl <- makeCluster(no_cores)  
+registerDoParallel(cl)  
+modFitGBM<-train(classe~.,data=finalTrain,method="gbm",trControl=TC, verbose=FALSE)
+stopCluster(cl) 
+
+predGBM<-predict(modFitGBM,finalTest)
+Accuracy.GBM<-confusionMatrix(finalTest$classe,predGBM)
+```
+
+### Models comparison (In Sample error)
+
+``` {r Models comparison,message=F, warning=F}
+results <- resamples(list(Clas.Tree=modFitForest, LDA=modFitLDA, RForests=modFitRForest, GBM=modFitGBM ))
+summary(results)[[3]][1]
+dotplot(results)
+```
+
+### Algorithms application on Test set  (Trees - Tables - Out Sample error)
+
+
+```{r out sample error,message=F, warning=F }
+rpart.plot(modFitForest$finalModel,roundint=FALSE)
+plot(Accuracy.Tree$table)
+Accuracy.Tree$table
+Accuracy.Tree$overall[1]
+
+plot(Accuracy.LDA$table)
+Accuracy.LDA$table
+Accuracy.LDA$overall[1]
+
+plot(Accuracy.RForests$table)
+Accuracy.RForests$table
+Accuracy.RForests$overall[1]
+
+plot(Accuracy.GBM$table)
+Accuracy.GBM$table
+Accuracy.GBM$overall[1]
+```
+
+## Course Project Prediction Quiz Portion
+
+Random Forests was classified as the best model to use.
+We will predict all 20 cases in Validation set by applying Random Forests algorithm.
+
+```{r quiz ,message=F, warning=F}
+quiz<-predict(modFitRForest,newdata=ValidationDataUNI)
+quiz
+
+```
+
